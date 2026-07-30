@@ -69,7 +69,7 @@ assertContains('src/tools/code-mode.ts', codeModeContent, 'https://reg.clinicalg
 
 const indexContent = readFile('src/index.ts');
 assertContains('src/index.ts', indexContent, 'AlleleRegistryDataDO', 'index.ts exports AlleleRegistryDataDO');
-assertContains('src/index.ts', indexContent, 'McpAgent', 'index.ts uses McpAgent');
+assertContains('src/index.ts', indexContent, 'StatelessMcpWorker', 'index.ts uses StatelessMcpWorker');
 assertContains('src/index.ts', indexContent, 'registerCodeMode', 'index.ts wires registerCodeMode');
 assertContains('src/index.ts', indexContent, 'registerQueryData', 'index.ts wires registerQueryData');
 assertContains('src/index.ts', indexContent, 'registerGetSchema', 'index.ts wires registerGetSchema');
