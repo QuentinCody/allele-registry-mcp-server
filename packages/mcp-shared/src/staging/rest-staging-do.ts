@@ -112,6 +112,38 @@ export class RestStagingDO extends DurableObject {
 	}
 
 	/**
+	 * Add tables that physically exist in this DO but are absent from the
+	 * inferred schema, so the SQL guard cannot reject a table we ourselves
+	 * created and advertised.
+	 *
+	 * The lossless fallback tables (`payloads`, `content_chunks`,
+	 * `chunk_metadata`) are named in every staging envelope's `tables_created`,
+	 * but only inference-derived tables were ever allowlisted — so the documented
+	 * recovery path ("query `payloads` with the data_access_id") failed with
+	 * "unknown table 'payloads'". Columns are left empty: this restores table
+	 * reachability without asserting a column shape we have not inferred.
+	 */
+	private withPhysicalTables(schema: InferredSchema): InferredSchema {
+		const known = new Set(schema.tables.map((t) => t.name));
+		const extra: InferredTable[] = [];
+		try {
+			const rows = this.sql
+				.exec(
+					"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+				)
+				.toArray() as Array<{ name?: unknown }>;
+			for (const r of rows) {
+				const name = typeof r.name === "string" ? r.name : undefined;
+				if (!name || known.has(name)) continue;
+				extra.push({ name, columns: [], indexes: [] });
+			}
+		} catch {
+			return schema; // sqlite_master unreadable → leave the schema untouched
+		}
+		return extra.length ? { tables: [...schema.tables, ...extra] } : schema;
+	}
+
+	/**
 	 * Lazily create a SchemaValidator using the stored inferred schema.
 	 * Returns null if schema is unavailable or parsing fails.
 	 * Cached for the lifetime of the DO instance; invalidated on new staging.
@@ -125,7 +157,9 @@ export class RestStagingDO extends DurableObject {
 				.one() as { schema_json: string } | undefined;
 			if (!row?.schema_json) return null;
 			const schema = JSON.parse(row.schema_json) as InferredSchema;
-			this.schemaValidator = new SchemaValidator(schema);
+			this.schemaValidator = new SchemaValidator(
+				this.withPhysicalTables(schema),
+			);
 			return this.schemaValidator;
 		} catch {
 			this.schemaValidatorInitFailed = true;
