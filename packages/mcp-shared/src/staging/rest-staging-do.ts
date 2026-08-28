@@ -316,6 +316,18 @@ export class RestStagingDO extends DurableObject {
 			}
 			if (url.pathname === "/delete" && request.method === "DELETE") {
 				await this.ctx.storage.deleteAll();
+				// `deleteAll()` drops the SQLite tables too, INCLUDING the internal
+				// bookkeeping ones (`_do_migrations`, `_staging_metadata`,
+				// `_inferred_schema`, `_column_profiles`, `_session_registry`).
+				// Those are created only by migrateMetadata(), which runs only in
+				// the constructor — so within this DO instance's lifetime they
+				// never came back, and the next /process died at storeProvenance
+				// with `no such table: _staging_metadata`. That is what made
+				// `oig_sync_data` permanently unable to load the LEIE snapshot.
+				// migrateMetadata is idempotent (CREATE TABLE IF NOT EXISTS +
+				// a version row), so re-running it here restores the invariant
+				// the constructor established.
+				this.migrateMetadata();
 				return this.jsonResponse({ success: true });
 			}
 			if (url.pathname.startsWith("/fs/") && request.method === "POST") {
