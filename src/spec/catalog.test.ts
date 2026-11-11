@@ -16,13 +16,14 @@ describe("alleleRegistryCatalog (smoke)", () => {
         expect(alleleRegistryCatalog.endpointCount).toBe(alleleRegistryCatalog.endpoints.length);
     });
 
-    it("exposes the two verified read endpoints (by CA# and by HGVS)", () => {
-        const paths = alleleRegistryCatalog.endpoints.map((e) => e.path).sort();
-        expect(paths).toEqual(["/allele", "/allele/{caid}"]);
-        for (const e of alleleRegistryCatalog.endpoints) {
-            expect(e.method).toBe("GET");
-            expect(e.coveredByTool).toBe("allele_registry_search");
-        }
+    it("retains single reads and exposes only read-only bulk POST", () => {
+        expect(alleleRegistryCatalog.endpoints).toEqual(expect.arrayContaining([
+            expect.objectContaining({method: "GET", path: "/allele"}),
+            expect.objectContaining({method: "GET", path: "/allele/{caid}"}),
+            expect.objectContaining({method: "POST", path: "/alleles"}),
+            expect.objectContaining({method: "GET", path: "/alleles"}),
+        ]));
+        expect(alleleRegistryCatalog.endpoints.every(e => e.method === "GET" || e.method === "POST" && e.path === "/alleles")).toBe(true);
     });
 
     it("the HGVS endpoint requires an hgvs query param; the id endpoint a caid path param", () => {

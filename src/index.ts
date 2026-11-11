@@ -27,8 +27,8 @@ export class MyMCP extends StatelessMcpWorker {
         registerQueryData(this.server, env);
         registerGetSchema(this.server, env);
         registerCodeMode(this.server, env);
-        registerVrsId(this.server);
-        registerRefgetAccession(this.server);
+        registerVrsId(this.server, env);
+        registerRefgetAccession(this.server, env);
     }
 }
 

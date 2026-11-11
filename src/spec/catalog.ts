@@ -1,68 +1,33 @@
-import type { ApiCatalog } from "@bio-mcp/shared/codemode/catalog";
-
-/**
- * ClinGen Allele Registry REST catalog.
- *
- * The Allele Registry canonicalizes ANY variant representation to one stable,
- * genome-build-agnostic identifier — a CA# (Canonical Allele, from genomic or
- * transcript input) or PA# (Protein Allele, from protein input). This is the
- * same normalization tmVar3 performs offline against a ~550 GB SQLite database;
- * here it is a single unauthenticated HTTP GET.
- *
- * Only two read operations are exposed (both verified live, no auth):
- *   - GET /allele/{caid}  — fetch a record by CA#/PA#
- *   - GET /allele?hgvs=…  — resolve any HGVS to its canonical allele
- *
- * Bulk query and variant registration (POST/PUT /alleles) require login + HMAC
- * auth and are intentionally NOT exposed by this read-only server.
- */
+import type {ApiCatalog, ParamDef} from "@bio-mcp/shared/codemode/catalog";
+import {FILE_FORMATS, EXTERNAL_FILTERS} from "../lib/batch";
+const fields: ParamDef = {name: "fields", type: "string", required: false, description: "Provider field projection: all or none with +field/-field modifiers. fields=all includes user-supplied externalSources as well as externalRecords. Pass literal + characters; the adapter encodes them."};
 export const alleleRegistryCatalog: ApiCatalog = {
-    name: "ClinGen Allele Registry",
-    baseUrl: "https://reg.clinicalgenome.org",
-    version: "1.01.xx (api v1)",
-    auth: "none",
-    endpointCount: 2,
-    notes:
-        "- PURPOSE: canonicalize a variant to a stable, build-agnostic id. Genomic/transcript HGVS → CA# (e.g. CA123643); protein HGVS → PA# (e.g. PA094029). The `@id` field is the canonical URL http://reg.genome.network/allele/<id>.\n" +
-        "- HGVS input accepts all three coordinate systems: genomic (NC_000007.14:g.140753336A>T), transcript cDNA (NM_004333.6:c.1799T>A), and protein (NP_004324.2:p.V600E). Protein HGVS accepts BOTH 1-letter (p.V600E) and 3-letter (p.Val600Glu) forms. URL-encode `:` and `>` — the isolate's api.get() encodes query params for you.\n" +
-        "- CROSS-REFERENCES: every record carries an `externalRecords` map linking the allele to dbSNP (rs#), ClinVar (ClinVarAlleles + ClinVarVariations), gnomAD (gnomAD_2 + gnomAD_4), ExAC, COSMIC, and MyVariantInfo (hg19 + hg38). So allele → all external database IDs is a single call.\n" +
-        "- RECORD SHAPE (JSON-LD): `genomicAlleles[]` (one per referenceGenome: GRCh38 + GRCh37; fields chromosome, coordinates, hgvs, referenceGenome, referenceSequence), `transcriptAlleles[]` (one per RefSeq transcript; fields geneSymbol, geneNCBI_id, hgvs, proteinEffect, referenceSequence, MANE — 48 rows for BRAF V600E), and `aminoAcidAlleles[]` (protein-level).\n" +
-        "- REVERSE LOOKUP by external id is NOT available as a simple GET (e.g. ?dbSNP.rs=, ?ClinVar.variationId=, ?gnomAD= all return HTTP 400). Those go through the authenticated bulk POST/PUT /alleles API, which this server does not expose. To resolve an rs#/ClinVar id to a CA#, obtain its HGVS from another source (e.g. the fleet's clinvar or gnomad servers) and call /allele?hgvs=.\n" +
-        "- STAGING: a well-cross-referenced variant (BRAF V600E ≈ 32 KB, 48 transcriptAlleles) can exceed the 30 KB inline threshold and auto-stage. Use allele_registry_query_data to SQL over the staged transcript_alleles / genomic_alleles tables.\n" +
-        "- Responses are JSON-LD; the adapter sends `Accept: application/json`.",
-    endpoints: [
-        {
-            method: "GET",
-            path: "/allele/{caid}",
-            summary:
-                "Fetch a canonical allele record by its ClinGen Allele Registry id (CA# for genomic canonical alleles, PA# for protein alleles). Returns genomicAlleles, transcriptAlleles, aminoAcidAlleles, and the externalRecords cross-map (dbSNP/ClinVar/gnomAD/ExAC/COSMIC/MyVariantInfo).",
-            category: "allele",
-            pathParams: [
-                {
-                    name: "caid",
-                    type: "string",
-                    required: true,
-                    description: "Allele id — CA######## (genomic canonical, e.g. CA123643) or PA###### (protein, e.g. PA094029).",
-                },
-            ],
-            coveredByTool: "allele_registry_search",
-        },
-        {
-            method: "GET",
-            path: "/allele",
-            summary:
-                "Resolve any HGVS expression to its canonical allele plus external cross-references. Genomic (NC_…:g.) and transcript (NM_/NR_…:c./n.) inputs return a CA#; protein (NP_…:p.) inputs return a PA#.",
-            category: "allele",
-            queryParams: [
-                {
-                    name: "hgvs",
-                    type: "string",
-                    required: true,
-                    description:
-                        "HGVS expression. Examples: NC_000007.14:g.140753336A>T (genomic GRCh38), NM_004333.6:c.1799T>A (transcript), NP_004324.2:p.V600E (protein, 1- or 3-letter accepted). URL-encode ':' and '>'.",
-                },
-            ],
-            coveredByTool: "allele_registry_search",
-        },
-    ],
+  name: "ClinGen Allele Registry",
+  baseUrl: "https://reg.clinicalgenome.org",
+  version: "Published API v1; runtime version reported in _mcp.registry_version", auth: "none", endpointCount: 6,
+  notes: "GET and POST are unauthenticated queries; PUT registers new alleles and is not exposed. A normalized response with @id='_:CA' is not a registered identifier. CA (nucleotide) and PA (protein) IDs represent different scopes. Preserve reference/assembly versions and coordinates rather than comparing unlike representations.\n" +
+    "Batch POST returns data plus _mcp input/order/error/provenance context. Duplicate inputs and per-line errors survive. Matching counts support the provider's documented positional contract for non-VCF batches; VCF output is not zipped to input records. Read-only POST never registers missing alleles.\n" +
+    "Single-allele GETs preserve their original JSON-LD response shape. New collection/source reads return data plus _mcp. externalRecords are cross-database links; externalSources are separately published user links. Both may be absent. Cross-links do not establish pathogenicity or clinical equivalence. Inactive records can supply activeUris; these are preserved, not silently followed.\n" +
+    "Reverse external-ID queries use plural /alleles (not /allele). GET collection reads default to limit=100, max 1000, and require a selector. Responses over 30 KiB stage; narrow fields/batches if the 4 MiB upstream limit is exceeded.\n" +
+    "The live 5.1.0 provider accepts gnomAD_2.id (GRCh37), gnomAD_3.id and gnomAD_4.id (GRCh38) for batch normalization and reverse queries. The legacy gnomAD.id name from the old PDF currently returns HTTP 400; it is not silently mapped to a release. Software version from X-CAR-Version is not a data snapshot or release pin. Missing cross-links do not prevent normalization of a valid identifier.",
+  endpoints: [
+    {method: "GET", path: "/allele/{caid}", summary: "Fetch a native JSON-LD canonical allele record by CA or PA ID", category: "allele", pathParams: [{name: "caid", type: "string", required: true, description: "CA or PA ID, e.g. CA123643 or PA094029"}], queryParams: [fields]},
+    {method: "GET", path: "/allele", summary: "Normalize an HGVS expression without registering it; retain unknown-ID and inactive-record information", category: "allele", queryParams: [{name: "hgvs", type: "string", required: true, description: "Versioned HGVS, e.g. NM_004333.6:c.1799T>A or NP_004324.2:p.Val600Glu"}, fields]},
+    {method: "POST", path: "/alleles", summary: "Read-only batch normalization/cross-reference retrieval with per-input errors", category: "batch", queryParams: [{name: "file", type: "string", required: true, enum: [...FILE_FORMATS], description: "Native input format; externalSource registration formats are not allowed"}, fields], body: {contentType: "text/plain", description: "Raw text, not JSON or form data. 1–100 newline-separated HGVS/IDs or 1–100 VCF records; max 128 KiB. VCF needs contig ID and explicit assembly for each chromosome. Preserve input order and duplicates."}, responseShape: "{data: <native allele/error array>, _mcp: {inputs, input_count, returned_count, count_matches, positional_mapping_available, error_indices, unregistered_indices, inactive_indices, ...}}", usageHint: "api.post('/alleles', text, {file:'hgvs', fields:'all'}). fields defaults to all. Per-line errors do not discard other rows. A count mismatch prevents positional mapping; blank-node IDs are not CA/PA registrations."},
+    {method: "GET", path: "/alleles", summary: "Find existing alleles by external identifier, gene, name, locus or published external source", category: "cross-references", queryParams: [
+      ...EXTERNAL_FILTERS.map(name => ({name, type: "string" as const, required: false, description: "Native external identifier value; may map to zero or multiple alleles"})),
+      ...["name", "gene", "refseq", "externalSource"].map(name => ({name, type: "string" as const, required: false, description: "Native query selector; at least one selector is required"})),
+      ...["begin", "end", "skip", "limit"].map(name => ({name, type: "number" as const, required: false, description: "Native locus/pagination parameter; begin/end require refseq. limit defaults to 100, maximum 1000; skip defaults to 0."})), fields,
+    ], usageHint: "Use ClinVar.variationId, ClinVar.alleleId, ClinVar.RCV or dbSNP.rs on this plural route. Pagination is a mutable query, not a release-pinned snapshot. Preserve all matches and their assembly/reference context."},
+    {method: "GET", path: "/externalSources", summary: "Discover definitions of user-published external sources", category: "cross-references"},
+    {method: "GET", path: "/externalSource/{sourceName}", summary: "Inspect one external source definition", category: "cross-references", pathParams: [{name: "sourceName", type: "string", required: true, description: "Discovered external source name"}]},
+  ],
+  workflows: [
+    {title: "Normalize a small HGVS batch without registration", keywords: ["batch", "HGVS", "normalization", "errors"], description: "One read-only POST; keep array order, error objects and blank-node identifiers. Genomic and protein representations remain separate.", code: `const inputs = ["NC_000007.14:g.140753336A>T", "NM_004333.6:c.1799T>A", "NP_004324.2:p.Val600Glu"];
+return await api.post("/alleles", inputs.join("\\n"), {file: "hgvs", fields: "all"});`},
+    {title: "Retrieve cross-references for a batch of existing CA and PA identifiers", keywords: ["batch", "CA", "PA", "cross-references", "externalRecords"], description: "Fetch existing records in one call. Preserve all external mappings and inactive activeUris; CA/PA identifiers are not interchangeable, and absent mappings do not prove absence of evidence.", code: `return await api.post("/alleles", ["CA123643", "PA094029"].join("\\n"), {file: "id", fields: "all"});`},
+    {title: "Find alleles linked to a ClinVar variation and inspect external source definitions", keywords: ["ClinVar", "reverse", "cross-references", "externalSources"], description: "Read one bounded page from the documented plural collection route, preserving multiple matches. Source definitions describe user-published links, not clinical classifications.", code: `const matches = await api.get("/alleles", {"ClinVar.variationId": "13961", limit: 10, fields: "all"});
+const sources = await api.get("/externalSources");
+return {matches, sources, complete: false};`},
+  ],
 };

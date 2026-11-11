@@ -1,6 +1,7 @@
 import type { McpServer } from "@bio-mcp/shared/mcp";
 import { z } from "zod";
 import { createQueryDataHandler } from "@bio-mcp/shared/staging/utils";
+import { alleleRegistryResponse } from "../lib/tool-result";
 
 interface QueryEnv {
     ALLELE_REGISTRY_DATA_DO?: unknown;
@@ -9,8 +10,8 @@ interface QueryEnv {
 export function registerQueryData(server: McpServer, env?: QueryEnv): void {
     const handler = createQueryDataHandler("ALLELE_REGISTRY_DATA_DO", "allele_registry");
 
-    server.registerTool(
-        "allele_registry_query_data",
+    for (const name of ["allele_registry_query_data", "mcp_allele_registry_query_data"]) server.registerTool(
+        name,
         {
             title: "Query Staged Allele Registry Data",
             description:
@@ -23,7 +24,7 @@ export function registerQueryData(server: McpServer, env?: QueryEnv): void {
         },
         async (args, extra) => {
             const runtimeEnv = env || (extra as { env?: QueryEnv })?.env || {};
-            return handler(args as Record<string, unknown>, runtimeEnv as Record<string, unknown>);
+            return alleleRegistryResponse(() => handler(args as Record<string, unknown>, runtimeEnv as Record<string, unknown>), runtimeEnv, name, extra, args);
         },
     );
 }

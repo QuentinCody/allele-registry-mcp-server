@@ -1,13 +1,10 @@
 /**
  * Compute GA4GH VRS identifiers for variants, offline.
  *
- * This is the join key for cross-server variant work. ClinVar variation IDs and
- * ClinGen CAIDs are minted over *different* normalization scopes (a CAID covers
- * genomic + transcript forms on GRCh38 and deliberately excludes protein; a
- * ClinVar record includes protein forms), and both are snapshots of the
- * alignment algorithm at mint time. Neither can be compared across sources by
- * string equality. A `ga4gh:VA.…` digest can — it is a pure function of the
- * sequence, the interval and the alt allele.
+ * VRS digests identify the supplied sequence/interval/alternate representation.
+ * Cross-source comparison requires compatible reference and normalization
+ * conventions. Registry CA/PA and ClinVar IDs belong to separate identifier
+ * systems; a matching protein consequence does not merge nucleotide alleles.
  */
 import type { McpServer } from "@bio-mcp/shared/mcp";
 import {
@@ -20,6 +17,7 @@ import {
 	VrsError,
 } from "@bio-mcp/shared/vrs/vrs";
 import { z } from "zod";
+import { alleleRegistryResponse } from "../lib/tool-result";
 
 /** Keeps one oversized request from monopolising the isolate. */
 const MAX_VARIANTS_PER_CALL = 500;
@@ -194,12 +192,17 @@ function registerDual(
 	baseName: string,
 	definition: ToolDefinition,
 	invoke: ToolInvocation,
+	env: { ALLELE_REGISTRY_DATA_DO?: unknown },
 ): void {
-	server.registerTool(`mcp_${baseName}`, definition, invoke);
-	server.registerTool(baseName, definition, invoke);
+	const respond: ToolInvocation = (args, extra) => alleleRegistryResponse(
+		() => Promise.resolve(invoke(args, extra)) as ReturnType<Parameters<typeof alleleRegistryResponse>[0]>,
+		env, baseName, extra, args,
+	);
+	server.registerTool(`mcp_${baseName}`, definition, respond);
+	server.registerTool(baseName, definition, respond);
 }
 
-export function registerVrsId(server: McpServer): void {
+export function registerVrsId(server: McpServer, env: { ALLELE_REGISTRY_DATA_DO?: unknown } = {}): void {
 	registerDual(
 		server,
 		"allele_registry_vrs_id",
@@ -210,6 +213,7 @@ export function registerVrsId(server: McpServer): void {
 				"Fully offline and deterministic — no upstream call. Use the resulting identifier as the " +
 				"join key when combining variant records across servers (clinvar, gnomad, civic, eva); " +
 				"ClinVar IDs and ClinGen CAIDs are NOT comparable to each other by string equality. " +
+				"VRS comparisons require compatible reference sequences and normalization conventions. " +
 				"Accepts either 1-based VCF coordinates (position + ref) or interbase coordinates (start + end).",
 			inputSchema: {
 				variants: z
@@ -240,10 +244,11 @@ export function registerVrsId(server: McpServer): void {
 				};
 			}
 		},
+		env,
 	);
 }
 
-export function registerRefgetAccession(server: McpServer): void {
+export function registerRefgetAccession(server: McpServer, env: { ALLELE_REGISTRY_DATA_DO?: unknown } = {}): void {
 	registerDual(
 		server,
 		"allele_registry_refget_accession",
@@ -284,5 +289,6 @@ export function registerRefgetAccession(server: McpServer): void {
 				};
 			}
 		},
+		env,
 	);
 }
